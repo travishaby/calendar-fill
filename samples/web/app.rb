@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+require 'active_support/all'
 require 'sinatra'
 require 'googleauth'
 require 'googleauth/stores/redis_token_store'
@@ -19,6 +20,9 @@ require 'google/apis/drive_v3'
 require 'google/apis/calendar_v3'
 require 'google-id-token'
 require 'dotenv'
+require 'faker'
+
+require 'pry'
 
 LOGIN_URL = '/'
 
@@ -102,6 +106,69 @@ get('/calendar') do
   erb :calendar
 end
 
+post '/create_events' do
+  calendar = build_calendar_service
+
+  request = build_freebusy_request(params)
+  response = calendar.query_freebusy(request)
+  busy_times = response.calendars.first[1].busy
+  attendees = [create_attendee(email: params[:email]), create_attendee(email: current_user_email)]
+
+  all_events_created = []
+  busy_times.each_with_index do |busy_time, index|
+    start_time = busy_time.end
+    break if busy_times[index + 1].nil?
+    end_time = busy_times[index + 1].start
+    event = create_event(start_time, end_time, attendees)
+    created_event = calendar.insert_event(current_user_email, event)
+    all_events_created << created_event
+  end
+
+  @result = all_events_created
+  erb :calendar
+end
+
+def build_calendar_service
+  calendar = Google::Apis::CalendarV3::CalendarService.new
+  calendar.authorization = credentials_for(Google::Apis::CalendarV3::AUTH_CALENDAR)
+  calendar
+end
+
+def build_freebusy_request(params)
+  request = Google::Apis::CalendarV3::FreeBusyRequest.new
+  request.items = [Google::Apis::CalendarV3::FreeBusyRequestItem.new(id: params[:email])]
+  request.time_min = DateTime.now
+  request.time_max = DateTime.now + 5.days
+  request
+end
+
+def current_user_email
+  session[:user_email]
+end
+
+def create_attendee(attendee_params = {email: params[:email]})
+  Google::Apis::CalendarV3::EventAttendee.new(attendee_params)
+end
+
+def create_event(start_time, end_time, attendees)
+  event_params = {
+    start: { date_time: start_time,
+             time_zone: 'America/Denver', },
+    end: { date_time: end_time,
+           time_zone: 'America/Denver', },
+    summary: build_plausible_event,
+    attendees: attendees
+  }
+  Google::Apis::CalendarV3::Event.new(event_params)
+end
+
+def build_plausible_event
+  "#{meeting_word} #{Faker::Hacker.ingverb} #{Faker::Hacker.adjective} #{Faker::Hacker.noun}"
+end
+
+def meeting_word
+  ['Discuss', 'Deep-dive into', 'Sync up on', 'Rethink', 'Ponder', 'Determine', 'Finalize'].sample
+end
 
 # Callback for authorization requests. This saves the autorization code and
 # redirects back to the URL that originally requested authorization. The code is
